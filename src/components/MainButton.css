@@ -1,0 +1,30 @@
+.main-button {
+  padding: 20px;
+  border-radius: 24px;
+  border: 0;
+  box-shadow: none;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  border-color: rgba(255, 255, 255, 0.74);
+  transition: all 0.3s ease-in-out;
+  background-color: #5552589d;
+  color: white;
+  cursor: pointer;
+  border: 1px solid  white;
+}
+
+.main-button:hover {
+  background-color: white;
+  color: black;
+}
+
+.main-button.loading {
+  background-color:  #5552589d;
+  cursor: not-allowed;
+}
+.main-button.loading:hover {
+  background-color:  #5552589d;
+  cursor: not-allowed;
+  color: white;
+}

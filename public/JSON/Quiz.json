@@ -1,0 +1,16 @@
+[
+  { "question": "1.What is your age?", "type": "text" },
+  { "question": "2.What is your gender?", "type": "radio", "options": ["Male", "Female", "Prefer not to say"] },
+  { "question": "3.What is your current weight?", "type": "text" },
+  { "question": "4.What is your height?", "type": "text" },
+  { "question": "5.What is your primary goal?", "type": "radio", "options": ["Lose weight", "Maintain current weight", "Gain muscle"] },
+  { "question": "6.By when would you like to reach this goal?", "type": "text" },
+  { "question": "7.What is your daily activity level (outside of workouts)?", "type": "radio", "options": ["Sedentary (mostly sitting, desk job)", "Lightly active (light movement, errands)", "Moderately active (walks, active job)", "Very active (physically demanding job)"] },
+  { "question": "8.How many days per week do you plan to work out?", "type": "radio", "options": ["1–2 days", "3–4 days", "5–6 days", "Daily"] },
+  { "question": "9.How long is a typical workout session for you?", "type": "radio", "options": ["15–30 minutes", "30–45 minutes", "45–60 minutes", "60+ minutes"] },
+  { "question": "10.Which types of workouts do you enjoy/prefer?", "type": "checkbox", "options": ["Strength training / Weightlifting", "Cardio (running, biking)", "HIIT (High-Intensity Interval Training)", "Yoga / Mobility", "Pilates / Stretching"] },
+  { "question": "11.Do you have any injuries or medical conditions we should know about?", "type": "radio", "options": ["Yes", "No"] },
+  { "question": "12.If yes, please describe briefly", "type": "text", "conditionalOn": { "question": "Do you have any injuries or medical conditions we should know about?", "value": "Yes" } },
+  { "question": "13.Do you follow any specific dietary preferences or have allergies?", "type": "checkbox", "options": ["None", "Vegetarian", "Vegan", "Gluten-free", "Lactose intolerant", "Other (please specify)"] },
+  { "question": "14.How many meals/snacks do you eat per day?", "type": "radio", "options": ["3", "4–5", "6 or more"] }
+]

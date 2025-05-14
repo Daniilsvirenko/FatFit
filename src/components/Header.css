@@ -1,0 +1,39 @@
+.header {
+  display: flex;
+  justify-content: space-between;
+ padding-right: 2%;
+  align-items: center;
+}
+
+.logo {
+  height: 100px;
+}
+
+.motivation {
+  color: white;
+  margin-top: 20px;
+  transition: text-shadow 0.3s ease-in-out;
+  opacity: 50%;
+}
+
+.motivation:hover {
+  text-shadow: 0 0 20px #9716b180, 0 0 10px rgb(174, 0, 255),
+    0 0 20px rgb(25, 4, 83), 0 0 40px rgb(89, 6, 105);
+  opacity: 80%;
+}
+
+.about-us-button {
+  height: fit-content;
+  padding: 10px 15px;
+  border-radius: 16px;
+  background-color: #b227ce80;
+  color: aliceblue;
+  transition: all 0.5s ease-in-out;
+  border: 0;
+}
+
+.about-us-button:hover {
+  background-color: rgb(170, 150, 212);
+  color: black;
+  transition: all 0.5s ease-in-out;
+}

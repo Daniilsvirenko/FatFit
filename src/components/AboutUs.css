@@ -1,0 +1,36 @@
+.about-us {
+  text-align: center;
+  padding: 35px;
+  background: #f9f9f9;
+  border-radius: 10px;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
+  width: 500px;
+  
+}
+
+.about-us-text {
+  margin-bottom: 20px;
+  font-size: 1.4rem;
+  color: #333;
+}
+
+.back-button {
+  background: none;
+  border: none;
+ 
+  cursor: pointer;
+  border: 1px  solid white;
+  width: fit-content;
+  border-radius:16px;
+  transition: all 0.5s ease-in-out;
+  min-width: 135px;
+  height: fit-content;
+  padding: 12px;
+  background: #ccc;
+  color: #333;
+  font-size: 1rem;
+}
+
+.back-button:hover {
+  background: #999;
+}
