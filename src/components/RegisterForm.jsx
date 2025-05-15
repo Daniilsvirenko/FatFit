@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import './RegisterForm.css';
+import { registerUser } from "../api/fatfit";
 
 const RegisterForm = ({ onBackClick }) => {
   const [quizData, setQuizData] = useState([]);
@@ -7,6 +8,7 @@ const RegisterForm = ({ onBackClick }) => {
   const [formData, setFormData] = useState({});
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [showPassword, setShowPassword] = useState(false);
+  const [message, setMessage] = useState("");
 
   useEffect(() => {
     fetch('http://localhost:3001/quiz')
@@ -83,40 +85,10 @@ const RegisterForm = ({ onBackClick }) => {
     setFormData({ ...formData, [question]: value });
   };
 
-  const handleSubmit = async () => {
-    const { fullname, username, email, password, ...quizAnswers } = formData;
-
-    try {
-      const registerRes = await fetch("http://localhost:3001/register", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ fullname, username, email, password }),
-      });
-
-      const regData = await registerRes.json();
-
-      if (!registerRes.ok) {
-        alert("Registration failed: " + regData.message);
-        return;
-      }
-
-      const quizRes = await fetch("http://localhost:3001/answers", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, answers: quizAnswers }),
-      });
-
-      const quizResult = await quizRes.json();
-      if (quizResult.success) {
-        alert("Registration and quiz submitted!");
-      } else {
-        alert("Quiz submission failed.");
-      }
-    } catch (err) {
-      console.error("Error:", err);
-      alert("An error occurred.");
-    }
+  const handleSubmit = async e => {
+    e.preventDefault();
+    const result = await registerUser(formData);
+    setMessage(result.message);
   };
 
   return (
@@ -190,6 +162,7 @@ const RegisterForm = ({ onBackClick }) => {
         </div>
       )}
       <button className="cancel-button" onClick={onBackClick}>Cancel</button>
+      {message && <div>{message}</div>}
     </div>
   );
 };
