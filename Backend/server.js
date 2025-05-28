@@ -351,54 +351,227 @@ app.get("/users", async (req, res) => {
  */
 app.get("/meal-of-the-day", async (req, res) => {
   const { username } = req.query;
-  if (!username) {
-    return res.status(400).json({ message: "Username is required." });
+  if (!username || username.trim() === '') {
+    return res.status(400).json({ 
+      success: false,
+      message: "Please provide a valid username"
+    });
   }
+
   try {
     const db = client.db("test");
     const answersCollection = db.collection("answers");
     const latestAnswers = await answersCollection.find({ username }).sort({ submittedAt: -1 }).limit(1).toArray();
+    
     if (!latestAnswers.length) {
-      return res.status(404).json({ message: "No answers found for user." });
+      return res.status(404).json({ 
+        success: false,
+        message: "No answers found for user." 
+      });
     }
+
     const answers = latestAnswers[0].answers;
-    let searchTerm = "healthy";
-    if (answers.goal === "lose") searchTerm = "low calorie";
-    else if (answers.goal === "gain") searchTerm = "high protein";
-    else if (answers.goal === "keep") searchTerm = "balanced";
-    const token = await getFatSecretToken();
-    const response = await fetch("https://platform.fatsecret.com/rest/server.api", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${token}`,
-        "Content-Type": "application/x-www-form-urlencoded"
-      },
-      body: `method=foods.search&search_expression=${encodeURIComponent(searchTerm)}&format=json`
+    const nutritionNeeds = calculateNutritionalNeeds(answers);
+    const mealCount = parseInt(answers["14.How many meals/snacks do you eat per day?"]) || 3;
+
+    // Dietary preferences/allergies handling
+    let diet = "";
+    let intolerances = [];
+    let excludeIngredients = [];
+    if (answers["13.Do you follow any specific dietary preferences or have allergies?"]) {
+      const prefs = answers["13.Do you follow any specific dietary preferences or have allergies?"];
+      if (prefs.includes("Vegetarian")) {
+        diet = "vegetarian";
+        excludeIngredients.push("chicken,beef,pork,fish,seafood,gelatin");
+      }
+      if (prefs.includes("Vegan")) {
+        diet = "vegan";
+        excludeIngredients.push("chicken,beef,pork,fish,seafood,gelatin,egg,cheese,milk,honey,butter,yogurt");
+      }
+      if (prefs.includes("Gluten-free")) intolerances.push("gluten");
+      if (prefs.includes("Lactose intolerant")) intolerances.push("dairy");
+    }
+
+    // Get meal plan from Spoonacular
+    const spoonacularKey = process.env.SPOONACULAR_API_KEY;
+    let spoonacularUrl = `https://api.spoonacular.com/mealplanner/generate?timeFrame=day&targetCalories=${nutritionNeeds.targetCalories}&number=${mealCount}&apiKey=${spoonacularKey}`;
+    if (diet) spoonacularUrl += `&diet=${encodeURIComponent(diet)}`;
+    if (intolerances.length > 0) spoonacularUrl += `&intolerances=${encodeURIComponent(intolerances.join(","))}`;
+    if (excludeIngredients.length > 0) spoonacularUrl += `&excludeIngredients=${encodeURIComponent(excludeIngredients.join(","))}`;
+
+    const mealRes = await fetch(spoonacularUrl);
+    let mealPlan = {};
+    if (mealRes.ok) {
+      mealPlan = await mealRes.json();
+      if (mealPlan.meals) {
+        mealPlan.meals = mealPlan.meals.slice(0, mealCount);
+        while (mealPlan.meals.length < mealCount) {
+          mealPlan.meals.push(null);
+        }
+      }
+    }
+
+    res.json({
+      success: true,
+      message: "Meal plan generated successfully!",
+      dailyCalories: nutritionNeeds.targetCalories,
+      macros: nutritionNeeds.macros,
+      mealPlan
     });
-    let suggestedDishes = [];
-    if (response.ok) {
-      const data = await response.json();
-      suggestedDishes = data.foods ? data.foods.food : [];
-    } else {
-      const errorText = await response.text();
-      console.error("FatSecret API error response:", errorText);
-      return res.status(500).json({ message: "FatSecret API error", details: errorText });
-    }
-    // Pick a different meal each day using the day of year
-    const today = new Date();
-    const start = new Date(today.getFullYear(), 0, 0);
-    const diff = today - start;
-    const oneDay = 1000 * 60 * 60 * 24;
-    const dayOfYear = Math.floor(diff / oneDay);
-    let mealOfTheDay = null;
-    if (suggestedDishes.length > 0) {
-      const index = dayOfYear % suggestedDishes.length;
-      mealOfTheDay = suggestedDishes[index];
-    }
-    res.json({ mealOfTheDay });
   } catch (err) {
     console.error("❌ Error getting meal of the day:", err);
     res.status(500).json({ message: "Server error." });
+  }
+});
+
+/**
+ * Get users with their quiz answers
+ * GET /user-details
+ * Returns: Array of usernames and their quiz answers
+ */
+app.get("/user-details", async (req, res) => {
+  try {
+    const { username } = req.query;
+    const db = client.db("test");
+    const answersCollection = db.collection("answers");
+
+    if (username) {
+      // Get only the latest answer for the specific user
+      const userAnswer = await answersCollection
+        .find({ username })
+        .sort({ submittedAt: -1 })
+        .limit(1)
+        .toArray();
+
+      if (userAnswer.length === 0) {
+        return res.json({
+          success: true,
+          count: 0,
+          users: []
+        });
+      }
+
+      const simplifiedAnswer = {
+        username: userAnswer[0].username,
+        answers: userAnswer[0].answers
+      };
+
+      return res.json({
+        success: true,
+        count: 1,
+        users: [simplifiedAnswer]
+      });
+    }
+
+    // If no username provided, get all users' latest answers
+    const userAnswers = await answersCollection
+      .find({})
+      .sort({ submittedAt: -1 })
+      .toArray();
+
+    const simplifiedAnswers = userAnswers.map(entry => ({
+      username: entry.username,
+      answers: entry.answers
+    }));
+
+    res.json({
+      success: true,
+      count: simplifiedAnswers.length,
+      users: simplifiedAnswers
+    });
+  } catch (err) {
+    console.error("❌ Error fetching user answers:", err);
+    res.status(500).json({ message: "Server error fetching answers." });
+  }
+});
+
+/**
+ * Test endpoint to check user answers
+ * POST /test-answers
+ * Adds sample test data and returns all user details
+ */
+app.post("/test-answers", async (req, res) => {
+  try {
+    const db = client.db("test");
+    const answersCollection = db.collection("answers");
+
+    // Complete sample test data matching all quiz questions
+    const testAnswers = [
+      {
+        username: "testuser1",
+        answers: {
+          "1.What is your age?": "25",
+          "2.What is your gender?": "Male",
+          "3.What is your current weight?": "70",
+          "4.What is your height?": "175",
+          "5.What is your primary goal?": "Gain muscle",
+          "6.By when would you like to reach this goal?": "3 months",
+          "7.What is your daily activity level (outside of workouts)?": "Moderately active (walks, active job)",
+          "8.How many days per week do you plan to work out?": "3–4 days",
+          "9.How long is a typical workout session for you?": "45–60 minutes",
+          "10.Which types of workouts do you enjoy/prefer?": ["Strength training / Weightlifting", "HIIT (High-Intensity Interval Training)"],
+          "11.Do you have any injuries or medical conditions we should know about?": "No",
+          "13.Do you follow any specific dietary preferences or have allergies?": ["None"],
+          "14.How many meals/snacks do you eat per day?": "4–5",
+          // Additional fields needed for calculations
+          age: "25",
+          gender: "Male",
+          weight: "70",
+          height: "175",
+          goal: "gain",
+          activityLevel: "Moderately active (walks, active job)"
+        }
+      },
+      {
+        username: "testuser2",
+        answers: {
+          "1.What is your age?": "30",
+          "2.What is your gender?": "Female",
+          "3.What is your current weight?": "65",
+          "4.What is your height?": "165",
+          "5.What is your primary goal?": "Lose weight",
+          "6.By when would you like to reach this goal?": "6 months",
+          "7.What is your daily activity level (outside of workouts)?": "Lightly active (light movement, errands)",
+          "8.How many days per week do you plan to work out?": "5–6 days",
+          "9.How long is a typical workout session for you?": "30–45 minutes",
+          "10.Which types of workouts do you enjoy/prefer?": ["Cardio (running, biking)", "Yoga / Mobility"],
+          "11.Do you have any injuries or medical conditions we should know about?": "No",
+          "13.Do you follow any specific dietary preferences or have allergies?": ["Vegetarian"],
+          "14.How many meals/snacks do you eat per day?": "3",
+          // Additional fields needed for calculations
+          age: "30",
+          gender: "Female",
+          weight: "65",
+          height: "165",
+          goal: "lose",
+          activityLevel: "Lightly active (light movement, errands)"
+        }
+      }
+    ];
+
+    // Clear existing test data
+    await answersCollection.deleteMany({ 
+      username: { $in: ["testuser1", "testuser2"] } 
+    });
+
+    // Insert test data
+    await answersCollection.insertMany(testAnswers);
+
+    // Get all user details to verify
+    const allAnswers = await answersCollection
+      .find({})
+      .toArray();
+
+    res.json({
+      success: true,
+      message: "Test data added successfully",
+      testData: testAnswers,
+      allAnswers: allAnswers.map(({ username, answers }) => ({ username, answers }))
+    });
+
+  } catch (err) {
+    console.error("❌ Error adding test data:", err);
+    res.status(500).json({ message: "Server error adding test data." });
   }
 });
 
