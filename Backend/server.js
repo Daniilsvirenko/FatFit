@@ -117,20 +117,58 @@ app.post("/register", async (req, res) => {
 });
 
 /**
- * Calculate daily calorie needs using Mifflin-St Jeor Equation
- * @param {Object} answers - { age, height, weight, gender, goal }
- * @returns {number} dailyCalories
+ * Calculate comprehensive nutritional needs
  */
-function calculateCalories({ age, height, weight, gender, goal }) {
+function calculateNutritionalNeeds(answers) {
+  // BMR calculation (Mifflin-St Jeor)
   let bmr;
-  if (gender === "male") {
-    bmr = 10 * weight + 6.25 * height - 5 * age + 5;
+  if (answers.gender.toLowerCase() === "male") {
+    bmr = 10 * answers.weight + 6.25 * answers.height - 5 * answers.age + 5;
   } else {
-    bmr = 10 * weight + 6.25 * height - 5 * age - 161;
+    bmr = 10 * answers.weight + 6.25 * answers.height - 5 * answers.age - 161;
   }
-  if (goal === "lose") return Math.round(bmr - 500);
-  if (goal === "gain") return Math.round(bmr + 300);
-  return Math.round(bmr);
+
+  // Activity multipliers
+  const activityMultipliers = {
+    "Sedentary (mostly sitting, desk job)": 1.2,
+    "Lightly active (light movement, errands)": 1.375,
+    "Moderately active (walks, active job)": 1.55,
+    "Very active (physically demanding job)": 1.725
+  };
+
+  const tdee = bmr * (activityMultipliers[answers.activityLevel] || 1.2);
+
+  // Adjust calories based on goal
+  let targetCalories;
+  let macroRatio;
+  
+  switch (answers.goal) {
+    case "lose":
+      targetCalories = tdee * 0.85;
+      macroRatio = { protein: 0.3, carbs: 0.4, fat: 0.3 };
+      break;
+    case "gain":
+      targetCalories = tdee * 1.15;
+      macroRatio = { protein: 0.35, carbs: 0.45, fat: 0.2 };
+      break;
+    default:
+      targetCalories = tdee;
+      macroRatio = { protein: 0.25, carbs: 0.45, fat: 0.3 };
+  }
+
+  const proteinGrams = Math.round((targetCalories * macroRatio.protein) / 4);
+  const carbGrams = Math.round((targetCalories * macroRatio.carbs) / 4);
+  const fatGrams = Math.round((targetCalories * macroRatio.fat) / 9);
+
+  return {
+    targetCalories: Math.round(targetCalories),
+    macros: {
+      protein: proteinGrams,
+      carbs: carbGrams,
+      fat: fatGrams
+    },
+    mealsPerDay: answers["14.How many meals/snacks do you eat per day?"]
+  };
 }
 
 /**
@@ -164,26 +202,57 @@ app.post("/answers", async (req, res) => {
       answers,
       submittedAt: new Date(),
     });
-    const dailyCalories = calculateCalories(answers);
+
+    const nutritionNeeds = calculateNutritionalNeeds(answers);
+    const mealCount = parseInt(answers["14.How many meals/snacks do you eat per day?"]) || 3;
+
+    // Dietary preferences/allergies handling
+    let diet = "";
+    let intolerances = [];
+    let excludeIngredients = [];
+    if (answers["13.Do you follow any specific dietary preferences or have allergies?"]) {
+      const prefs = answers["13.Do you follow any specific dietary preferences or have allergies?"];
+      if (prefs.includes("Vegetarian")) {
+        diet = "vegetarian";
+        excludeIngredients.push("chicken,beef,pork,fish,seafood,gelatin");
+      }
+      if (prefs.includes("Vegan")) {
+        diet = "vegan";
+        excludeIngredients.push("chicken,beef,pork,fish,seafood,gelatin,egg,cheese,milk,honey,butter,yogurt");
+      }
+      if (prefs.includes("Gluten-free")) intolerances.push("gluten");
+      if (prefs.includes("Lactose intolerant")) intolerances.push("dairy");
+    }
+
+    // Get meal plan from Spoonacular with exact meal count
     const spoonacularKey = process.env.SPOONACULAR_API_KEY;
-    const mealCount = 3;
-    const spoonacularUrl = `https://api.spoonacular.com/mealplanner/generate?timeFrame=day&targetCalories=${dailyCalories}&number=${mealCount}&apiKey=${spoonacularKey}`;
+    let spoonacularUrl = `https://api.spoonacular.com/mealplanner/generate?timeFrame=day&targetCalories=${nutritionNeeds.targetCalories}&number=${mealCount}&apiKey=${spoonacularKey}`;
+    if (diet) spoonacularUrl += `&diet=${encodeURIComponent(diet)}`;
+    if (intolerances.length > 0) spoonacularUrl += `&intolerances=${encodeURIComponent(intolerances.join(","))}`;
+    if (excludeIngredients.length > 0) spoonacularUrl += `&excludeIngredients=${encodeURIComponent(excludeIngredients.join(","))}`;
+
     const mealRes = await fetch(spoonacularUrl);
     let mealPlan = {};
     if (mealRes.ok) {
       mealPlan = await mealRes.json();
-    } else {
-      const errorText = await mealRes.text();
-      console.error("Spoonacular API error:", errorText);
+      // Ensure exact meal count
+      if (mealPlan.meals) {
+        mealPlan.meals = mealPlan.meals.slice(0, mealCount);
+        while (mealPlan.meals.length < mealCount) {
+          mealPlan.meals.push(null);
+        }
+      }
     }
+
     res.status(201).json({
       success: true,
       message: "Answers saved and meal plan generated!",
-      dailyCalories,
+      dailyCalories: nutritionNeeds.targetCalories,
+      macros: nutritionNeeds.macros,
       mealPlan
     });
   } catch (err) {
-    console.error("❌ Error saving answers or fetching Spoonacular:", err);
+    console.error("❌ Error:", err);
     res.status(500).json({ success: false, message: "Server error." });
   }
 });
