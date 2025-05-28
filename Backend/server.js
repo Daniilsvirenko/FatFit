@@ -372,44 +372,70 @@ app.get("/meal-of-the-day", async (req, res) => {
 
     const answers = latestAnswers[0].answers;
     const nutritionNeeds = calculateNutritionalNeeds(answers);
-    const mealCount = parseInt(answers["14.How many meals/snacks do you eat per day?"]) || 3;
+    
+    // Parse meal count from answer string
+    let mealCount;
+    const mealAnswer = answers["14.How many meals/snacks do you eat per day?"];
+    if (mealAnswer === "3") mealCount = 3;
+    else if (mealAnswer === "4–5") mealCount = 5;
+    else if (mealAnswer === "6 or more") mealCount = 6;
+    else mealCount = 3; // default
 
-    // Dietary preferences/allergies handling
-    let diet = "";
-    let intolerances = [];
-    let excludeIngredients = [];
-    if (answers["13.Do you follow any specific dietary preferences or have allergies?"]) {
-      const prefs = answers["13.Do you follow any specific dietary preferences or have allergies?"];
-      if (prefs.includes("Vegetarian")) {
-        diet = "vegetarian";
-        excludeIngredients.push("chicken,beef,pork,fish,seafood,gelatin");
+    // Split daily calories into portions
+    const caloriesPerMeal = Math.round(nutritionNeeds.targetCalories / mealCount);
+
+    // Make multiple API calls if needed to get enough meals
+    let allMeals = [];
+    const batchSize = 3; // Spoonacular's limit per request
+    const batches = Math.ceil(mealCount / batchSize);
+
+    for (let i = 0; i < batches; i++) {
+      const remainingMeals = mealCount - (i * batchSize);
+      const currentBatchSize = Math.min(remainingMeals, batchSize);
+      
+      const spoonacularKey = process.env.SPOONACULAR_API_KEY;
+      let spoonacularUrl = `https://api.spoonacular.com/mealplanner/generate?timeFrame=day&targetCalories=${caloriesPerMeal * currentBatchSize}&number=${currentBatchSize}&apiKey=${spoonacularKey}`;
+      
+      // Dietary preferences/allergies handling
+      let diet = "";
+      let intolerances = [];
+      let excludeIngredients = [];
+      if (answers["13.Do you follow any specific dietary preferences or have allergies?"]) {
+        const prefs = answers["13.Do you follow any specific dietary preferences or have allergies?"];
+        if (prefs.includes("Vegetarian")) {
+          diet = "vegetarian";
+          excludeIngredients.push("chicken,beef,pork,fish,seafood,gelatin");
+        }
+        if (prefs.includes("Vegan")) {
+          diet = "vegan";
+          excludeIngredients.push("chicken,beef,pork,fish,seafood,gelatin,egg,cheese,milk,honey,butter,yogurt");
+        }
+        if (prefs.includes("Gluten-free")) intolerances.push("gluten");
+        if (prefs.includes("Lactose intolerant")) intolerances.push("dairy");
       }
-      if (prefs.includes("Vegan")) {
-        diet = "vegan";
-        excludeIngredients.push("chicken,beef,pork,fish,seafood,gelatin,egg,cheese,milk,honey,butter,yogurt");
-      }
-      if (prefs.includes("Gluten-free")) intolerances.push("gluten");
-      if (prefs.includes("Lactose intolerant")) intolerances.push("dairy");
-    }
+      if (diet) spoonacularUrl += `&diet=${encodeURIComponent(diet)}`;
+      if (intolerances.length > 0) spoonacularUrl += `&intolerances=${encodeURIComponent(intolerances.join(","))}`;
+      if (excludeIngredients.length > 0) spoonacularUrl += `&excludeIngredients=${encodeURIComponent(excludeIngredients.join(","))}`;
 
-    // Get meal plan from Spoonacular
-    const spoonacularKey = process.env.SPOONACULAR_API_KEY;
-    let spoonacularUrl = `https://api.spoonacular.com/mealplanner/generate?timeFrame=day&targetCalories=${nutritionNeeds.targetCalories}&number=${mealCount}&apiKey=${spoonacularKey}`;
-    if (diet) spoonacularUrl += `&diet=${encodeURIComponent(diet)}`;
-    if (intolerances.length > 0) spoonacularUrl += `&intolerances=${encodeURIComponent(intolerances.join(","))}`;
-    if (excludeIngredients.length > 0) spoonacularUrl += `&excludeIngredients=${encodeURIComponent(excludeIngredients.join(","))}`;
-
-    const mealRes = await fetch(spoonacularUrl);
-    let mealPlan = {};
-    if (mealRes.ok) {
-      mealPlan = await mealRes.json();
-      if (mealPlan.meals) {
-        mealPlan.meals = mealPlan.meals.slice(0, mealCount);
-        while (mealPlan.meals.length < mealCount) {
-          mealPlan.meals.push(null);
+      const mealRes = await fetch(spoonacularUrl);
+      if (mealRes.ok) {
+        const batchPlan = await mealRes.json();
+        if (batchPlan.meals) {
+          allMeals = [...allMeals, ...batchPlan.meals];
         }
       }
     }
+
+    // Construct final response
+    const mealPlan = {
+      meals: allMeals.slice(0, mealCount),
+      nutrients: {
+        calories: nutritionNeeds.targetCalories,
+        protein: nutritionNeeds.macros.protein,
+        fat: nutritionNeeds.macros.fat,
+        carbohydrates: nutritionNeeds.macros.carbs
+      }
+    };
 
     res.json({
       success: true,
@@ -418,6 +444,7 @@ app.get("/meal-of-the-day", async (req, res) => {
       macros: nutritionNeeds.macros,
       mealPlan
     });
+
   } catch (err) {
     console.error("❌ Error getting meal of the day:", err);
     res.status(500).json({ message: "Server error." });
