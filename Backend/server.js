@@ -4,8 +4,9 @@ import express from "express";
 import fs from "fs";
 import cors from "cors";
 import bcrypt from "bcrypt";
-import { MongoClient } from "mongodb";
+import { MongoClient, ObjectId } from "mongodb";
 import fetch from "node-fetch";
+import jwt from "jsonwebtoken";
 
 const app = express();
 const PORT = 3001;
@@ -16,6 +17,8 @@ const quiz = JSON.parse(raw);
 
 // MongoDB client setup
 const client = new MongoClient(process.env.MONGO_URI);
+
+const JWT_SECRET = process.env.JWT_SECRET || "dev_secret_key";
 
 // Middleware
 app.use(
@@ -39,6 +42,20 @@ async function connectDB() {
 }
 connectDB();
 
+// JWT middleware
+function authenticateJWT(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({ message: "Missing or invalid token." });
+  }
+  const token = authHeader.split(" ")[1];
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) return res.status(403).json({ message: "Invalid token." });
+    req.user = user;
+    next();
+  });
+}
+
 /**
  * User login
  * POST /login
@@ -60,7 +77,9 @@ app.post("/login", async (req, res) => {
     if (!isMatch) {
       return res.status(401).json({ message: "Incorrect username or password." });
     }
-    return res.status(200).json({ success: true, message: "Login successful!" });
+    // Generate JWT
+    const token = jwt.sign({ username: user.username, email: user.email }, JWT_SECRET, { expiresIn: "2h" });
+    return res.status(200).json({ success: true, message: "Login successful!", token });
   } catch (err) {
     console.error("❌ Login error:", err);
     return res.status(500).json({ message: "Server error during login." });
@@ -109,7 +128,9 @@ app.post("/register", async (req, res) => {
     }
     const hashedPassword = await bcrypt.hash(password, 10);
     await users.insertOne({ fullname, username, email, password: hashedPassword });
-    res.status(201).json({ message: "User registered successfully!" });
+    // Generate JWT
+    const token = jwt.sign({ username, email }, JWT_SECRET, { expiresIn: "2h" });
+    res.status(201).json({ message: "User registered successfully!", token });
   } catch (err) {
     console.error("❌ Registration error:", err);
     res.status(500).json({ message: "Server error." });
@@ -401,10 +422,12 @@ app.get("/fatsecret-food/:id", async (req, res) => {
  * Save user's favorite foods
  * POST /user-foods
  * Body: { username, foodId, foodName, servingSize }
+ * Protected: JWT required
  */
-app.post("/user-foods", async (req, res) => {
+app.post("/user-foods", authenticateJWT, async (req, res) => {
   try {
-    const { username, foodId, foodName, servingSize } = req.body;
+    const { foodId, foodName, servingSize } = req.body;
+    const username = req.user.username;
     const db = client.db("test");
     await db.collection("userFoods").insertOne({
       username,
@@ -420,14 +443,67 @@ app.post("/user-foods", async (req, res) => {
 });
 
 /**
+ * Update a user's saved food (e.g., serving size)
+ * PUT /user-foods/:id
+ * Body: { servingSize }
+ * Protected: JWT required
+ */
+app.put("/user-foods/:id", authenticateJWT, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { servingSize } = req.body;
+    const username = req.user.username;
+    const db = client.db("test");
+    const result = await db.collection("userFoods").updateOne(
+      { _id: new ObjectId(id), username },
+      { $set: { servingSize } }
+    );
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ message: "Food not found or not owned by user." });
+    }
+    res.json({ message: "Food updated successfully" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Delete a user's saved food
+ * DELETE /user-foods/:id
+ * Protected: JWT required
+ */
+app.delete("/user-foods/:id", authenticateJWT, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const username = req.user.username;
+    const db = client.db("test");
+    const result = await db.collection("userFoods").deleteOne({
+      _id: new ObjectId(id),
+      username
+    });
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ message: "Food not found or not owned by user." });
+    }
+    res.json({ message: "Food deleted successfully" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
  * Get user's saved foods
  * GET /user-foods/:username
+ * Protected: JWT required, only allow user to get their own foods
  */
-app.get("/user-foods/:username", async (req, res) => {
+app.get("/user-foods/:username", authenticateJWT, async (req, res) => {
   try {
+    const username = req.user.username;
+    if (username !== req.params.username) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
     const db = client.db("test");
     const foods = await db.collection("userFoods")
-      .find({ username: req.params.username })
+      .find({ username })
       .sort({ savedAt: -1 })
       .toArray();
     res.json(foods);
