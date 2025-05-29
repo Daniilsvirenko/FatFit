@@ -90,8 +90,9 @@ app.post("/login", async (req, res) => {
  * Check if user/email exists
  * POST /check-user
  * Body: { username?, email? }
+ * Protected: JWT required
  */
-app.post("/check-user", async (req, res) => {
+app.post("/check-user", authenticateJWT, async (req, res) => {
   const { username, email } = req.body;
   if (!username && !email) {
     return res.status(400).json({ exists: false, message: "Username or email is missing." });
@@ -682,8 +683,9 @@ app.get("/meal-of-the-day", async (req, res) => {
  * Get users with their quiz answers
  * GET /user-details
  * Returns: Array of usernames and their quiz answers
+ * Protected: JWT required
  */
-app.get("/user-details", async (req, res) => {
+app.get("/user-details", authenticateJWT, async (req, res) => {
   try {
     const { username } = req.query;
     const db = client.db("test");
