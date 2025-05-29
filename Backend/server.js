@@ -116,6 +116,13 @@ app.post("/register", async (req, res) => {
   }
 });
 
+function getMealCount(mealPreference) {
+  if (mealPreference === "3") return 3;
+  if (mealPreference === "4–5") return 5;
+  if (mealPreference === "6 or more") return 6;
+  return 3; // default
+}
+
 /**
  * Calculate comprehensive nutritional needs
  */
@@ -167,7 +174,7 @@ function calculateNutritionalNeeds(answers) {
       carbs: carbGrams,
       fat: fatGrams
     },
-    mealsPerDay: answers["14.How many meals/snacks do you eat per day?"]
+    mealsPerDay: getMealCount(answers["14.How many meals/snacks do you eat per day?"])
   };
 }
 
@@ -197,14 +204,18 @@ app.post("/answers", async (req, res) => {
   try {
     const db = client.db("test");
     const answersCollection = db.collection("answers");
-    await answersCollection.insertOne({
+
+    // Insert the answers first, mealPlan/nutrition will be updated after generation
+    const insertResult = await answersCollection.insertOne({
       username,
       answers,
       submittedAt: new Date(),
+      mealPlan: null,
+      nutrition: null
     });
 
     const nutritionNeeds = calculateNutritionalNeeds(answers);
-    const mealCount = parseInt(answers["14.How many meals/snacks do you eat per day?"]) || 3;
+    const mealCount = getMealCount(answers["14.How many meals/snacks do you eat per day?"]);
 
     // Dietary preferences/allergies handling
     let diet = "";
@@ -235,14 +246,47 @@ app.post("/answers", async (req, res) => {
     let mealPlan = {};
     if (mealRes.ok) {
       mealPlan = await mealRes.json();
-      // Ensure exact meal count
       if (mealPlan.meals) {
-        mealPlan.meals = mealPlan.meals.slice(0, mealCount);
         while (mealPlan.meals.length < mealCount) {
-          mealPlan.meals.push(null);
+          const additionalMealRes = await fetch(`https://api.spoonacular.com/recipes/random?number=1&apiKey=${spoonacularKey}`);
+          if (additionalMealRes.ok) {
+            const additionalMeal = await additionalMealRes.json();
+            if (additionalMeal.recipes && additionalMeal.recipes[0]) {
+              mealPlan.meals.push({
+                id: additionalMeal.recipes[0].id,
+                title: additionalMeal.recipes[0].title,
+                readyInMinutes: additionalMeal.recipes[0].readyInMinutes,
+                servings: additionalMeal.recipes[0].servings,
+                sourceUrl: additionalMeal.recipes[0].sourceUrl,
+                image: additionalMeal.recipes[0].image
+              });
+            }
+          }
         }
+        mealPlan.meals = mealPlan.meals.slice(0, mealCount);
+        mealPlan.meals = mealPlan.meals.map(meal => {
+          let image = meal.image;
+          if (image && !image.startsWith("http")) {
+            image = `https://img.spoonacular.com/recipes/${meal.id}-556x370.jpg`;
+          }
+          return { ...meal, image };
+        });
       }
     }
+
+    // Save mealPlan and nutrition info to the just-inserted answer document
+    await answersCollection.updateOne(
+      { _id: insertResult.insertedId },
+      {
+        $set: {
+          mealPlan,
+          nutrition: {
+            dailyCalories: nutritionNeeds.targetCalories,
+            macros: nutritionNeeds.macros
+          }
+        }
+      }
+    );
 
     res.status(201).json({
       success: true,
@@ -328,6 +372,71 @@ app.get("/fatsecret-search", async (req, res) => {
 });
 
 /**
+ * Get detailed food info from FatSecret
+ * GET /fatsecret-food/:id
+ */
+app.get("/fatsecret-food/:id", async (req, res) => {
+  try {
+    const token = await getFatSecretToken();
+    const response = await fetch("https://platform.fatsecret.com/rest/server.api", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: `method=food.get&food_id=${req.params.id}&format=json`
+    });
+    
+    if (!response.ok) {
+      throw new Error("Failed to fetch food details");
+    }
+    const data = await response.json();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Save user's favorite foods
+ * POST /user-foods
+ * Body: { username, foodId, foodName, servingSize }
+ */
+app.post("/user-foods", async (req, res) => {
+  try {
+    const { username, foodId, foodName, servingSize } = req.body;
+    const db = client.db("test");
+    await db.collection("userFoods").insertOne({
+      username,
+      foodId,
+      foodName,
+      servingSize,
+      savedAt: new Date()
+    });
+    res.json({ message: "Food saved successfully" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Get user's saved foods
+ * GET /user-foods/:username
+ */
+app.get("/user-foods/:username", async (req, res) => {
+  try {
+    const db = client.db("test");
+    const foods = await db.collection("userFoods")
+      .find({ username: req.params.username })
+      .sort({ savedAt: -1 })
+      .toArray();
+    res.json(foods);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
  * Get all registered users (for admin/debug)
  * GET /users
  * Returns: Array of users (without passwords)
@@ -361,6 +470,7 @@ app.get("/meal-of-the-day", async (req, res) => {
   try {
     const db = client.db("test");
     const answersCollection = db.collection("answers");
+    // Get latest answer with mealPlan for this user
     const latestAnswers = await answersCollection.find({ username }).sort({ submittedAt: -1 }).limit(1).toArray();
     
     if (!latestAnswers.length) {
@@ -370,33 +480,37 @@ app.get("/meal-of-the-day", async (req, res) => {
       });
     }
 
+    // If mealPlan exists in DB, return it directly
+    if (latestAnswers[0].mealPlan && latestAnswers[0].nutrition) {
+      return res.json({
+        success: true,
+        message: "Meal plan loaded from database!",
+        dailyCalories: latestAnswers[0].nutrition.dailyCalories,
+        macros: latestAnswers[0].nutrition.macros,
+        mealPlan: latestAnswers[0].mealPlan
+      });
+    }
+
+    // Fallback: generate meal plan if not present (should rarely happen)
     const answers = latestAnswers[0].answers;
     const nutritionNeeds = calculateNutritionalNeeds(answers);
-    
-    // Parse meal count from answer string
     let mealCount;
     const mealAnswer = answers["14.How many meals/snacks do you eat per day?"];
     if (mealAnswer === "3") mealCount = 3;
     else if (mealAnswer === "4–5") mealCount = 5;
     else if (mealAnswer === "6 or more") mealCount = 6;
-    else mealCount = 3; // default
+    else mealCount = 3;
 
-    // Split daily calories into portions
     const caloriesPerMeal = Math.round(nutritionNeeds.targetCalories / mealCount);
-
-    // Make multiple API calls if needed to get enough meals
     let allMeals = [];
-    const batchSize = 3; // Spoonacular's limit per request
+    const batchSize = 3;
     const batches = Math.ceil(mealCount / batchSize);
 
     for (let i = 0; i < batches; i++) {
       const remainingMeals = mealCount - (i * batchSize);
       const currentBatchSize = Math.min(remainingMeals, batchSize);
-      
       const spoonacularKey = process.env.SPOONACULAR_API_KEY;
       let spoonacularUrl = `https://api.spoonacular.com/mealplanner/generate?timeFrame=day&targetCalories=${caloriesPerMeal * currentBatchSize}&number=${currentBatchSize}&apiKey=${spoonacularKey}`;
-      
-      // Dietary preferences/allergies handling
       let diet = "";
       let intolerances = [];
       let excludeIngredients = [];
@@ -421,7 +535,30 @@ app.get("/meal-of-the-day", async (req, res) => {
       if (mealRes.ok) {
         const batchPlan = await mealRes.json();
         if (batchPlan.meals) {
-          allMeals = [...allMeals, ...batchPlan.meals];
+          const enrichedMeals = await Promise.all(batchPlan.meals.map(async (meal) => {
+            let image = meal.image;
+            if (!meal.sourceUrl || !image) {
+              const detailsRes = await fetch(
+                `https://api.spoonacular.com/recipes/${meal.id}/information?apiKey=${spoonacularKey}`
+              );
+              if (detailsRes.ok) {
+                const details = await detailsRes.json();
+                image = details.image || image;
+                return {
+                  ...meal,
+                  sourceUrl: details.sourceUrl,
+                  image: image && !image.startsWith("http")
+                    ? `https://img.spoonacular.com/recipes/${meal.id}-556x370.jpg`
+                    : image
+                };
+              }
+            }
+            if (image && !image.startsWith("http")) {
+              image = `https://img.spoonacular.com/recipes/${meal.id}-556x370.jpg`;
+            }
+            return { ...meal, image };
+          }));
+          allMeals = [...allMeals, ...enrichedMeals];
         }
       }
     }
@@ -437,9 +574,23 @@ app.get("/meal-of-the-day", async (req, res) => {
       }
     };
 
+    // Save the generated mealPlan and nutrition info to the latest answer document
+    await answersCollection.updateOne(
+      { _id: latestAnswers[0]._id },
+      {
+        $set: {
+          mealPlan,
+          nutrition: {
+            dailyCalories: nutritionNeeds.targetCalories,
+            macros: nutritionNeeds.macros
+          }
+        }
+      }
+    );
+
     res.json({
       success: true,
-      message: "Meal plan generated successfully!",
+      message: "Meal plan generated and saved!",
       dailyCalories: nutritionNeeds.targetCalories,
       macros: nutritionNeeds.macros,
       mealPlan
@@ -606,3 +757,4 @@ app.post("/test-answers", async (req, res) => {
 app.listen(PORT, () => {
   console.log(`Server running at http://localhost:${PORT}`);
 });
+

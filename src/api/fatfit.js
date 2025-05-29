@@ -41,3 +41,32 @@ export async function getAllUsers() {
   const res = await fetch(`${BASE_URL}/users`);
   return await res.json();
 }
+
+// Get detailed food information
+export async function getFoodDetails(foodId) {
+  const res = await fetch(`${BASE_URL}/fatsecret-food/${foodId}`, {
+    headers: { "Authorization": `Bearer ${localStorage.getItem('token')}` }
+  });
+  return await res.json();
+}
+
+// Save food to user's favorites
+export async function saveFoodToFavorites(data) {
+  const res = await fetch(`${BASE_URL}/user-foods`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${localStorage.getItem('token')}`
+    },
+    body: JSON.stringify(data)
+  });
+  return await res.json();
+}
+
+// Get user's saved foods
+export async function getUserFoods(username) {
+  const res = await fetch(`${BASE_URL}/user-foods/${username}`, {
+    headers: { "Authorization": `Bearer ${localStorage.getItem('token')}` }
+  });
+  return await res.json();
+}
